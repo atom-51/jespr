@@ -140,6 +140,7 @@ class JESPR(pl.LightningModule):
         # For scaling the cosing similarity score
         self.temperature = torch.tensor(1)
         self.loss_fn = nn.CrossEntropyLoss()
+        self.save_hyperparameters()
 
     def forward(self, x) -> tuple:
         """Foward Function for JESPR
@@ -223,8 +224,17 @@ class JESPR(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss, logits = self.forward(batch)
-        self.log("metrics/epoch/loss", loss)
-        return loss
+        acc = torch.trace(logits.softmax(dim=1)) / logits.shape[0]
+        self.log("metrics/epoch/train/loss", loss)
+        self.log("metrics/epoch/train/acc", acc)
+        return loss, acc
+
+    def validation_step(self, batch, batch_idx):
+        loss, logits = self.forward(batch)
+        acc = torch.trace(logits.softmax(dim=1)) / logits.shape[0]
+        self.log("metrics/epoch/val/loss", loss)
+        self.log("metrics/epoch/val/acc", acc)
+        return loss, acc
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=0.02)
