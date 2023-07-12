@@ -10,8 +10,10 @@ from esm import Alphabet
 
 
 class ESMDataset(Dataset):
-    def __init__(self, data_dir="data", max_seq_len=200):
-        data_dir_complete = path.join(path.abspath(path.join(__file__, "..")), data_dir)
+    def __init__(self, data_dir="data/", max_seq_len=200):
+        data_dir_complete = path.join(
+            path.abspath(path.join(__file__, "..")), data_dir
+        )
         with open(
             path.join(data_dir_complete, "all_structures.pkl"), "rb"
         ) as f:
@@ -40,12 +42,12 @@ class ESMDataset(Dataset):
                 structure_data.append(self.structure_data[i])
                 sequence_data.append(seq)
                 prot_names.append(self.prot_names[i])
-        
+
         # update the dataset
         self.structure_data = structure_data
         self.sequence_data = sequence_data
         self.prot_names = prot_names
-    
+
     def __len__(self):
         return len(self.prot_names)
 
@@ -74,10 +76,13 @@ class ESMDataLoader(DataLoader):
         batch_size=64,
         shuffle=True,
         num_workers=1,
+        **kwargs,
     ):
         self.alphabet = alphabet
         self.collate_fn = util.CoordBatchConverter(alphabet)
-        self.dataset = ESMDataset(data_dir=data_dir)
+        self.dataset = kwargs.get("dataset", ESMDataset(data_dir=data_dir))
+        self.batch_sampler = kwargs.get("batch_sampler", None)
+        self.sampler = kwargs.get("sampler", None)
         super().__init__(
             dataset=self.dataset,
             batch_size=batch_size,
