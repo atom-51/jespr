@@ -78,23 +78,23 @@ def main(args, mode="train"):
     )
 
     esm_data_lightning.setup("fit")
-    total_iterations = epochs * (
-        len(esm_data_lightning.train_dataloader()) // batch_size
-    )
+    # total_iterations = epochs * (
+    #     len(esm_data_lightning.train_dataloader()) // batch_size
+    # )
 
-    print("Initializing JESPR...")
-    jespr = JESPR(
-        esm2=esm2,
-        esm_if=esm_if,
-        esm2_alphabet=alphabet_2,
-        esm_if_alphabet=alphabet_if,
-        optim_args=optim_args,
-        temperature=temperature,
-        total_iterations=total_iterations,
-    )
+    # print("Initializing JESPR...")
+    # jespr = JESPR(
+    #     esm2=esm2,
+    #     esm_if=esm_if,
+    #     esm2_alphabet=alphabet_2,
+    #     esm_if_alphabet=alphabet_if,
+    #     optim_args=optim_args,
+    #     temperature=temperature,
+    #     total_iterations=total_iterations,
+    # )
 
     if mode != "train":
-        return (jespr, esm_data_lightning)
+        return esm_data_lightning
 
     print("Initializing Wandb Logger...")
     wandb_logger = WandbLogger(

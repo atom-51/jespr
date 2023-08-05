@@ -5,6 +5,10 @@ import pickle
 from typing import Tuple
 from argparse import Namespace
 
+import random
+from copy import deepcopy
+
+
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 from lightning.pytorch.core import LightningDataModule
@@ -72,14 +76,90 @@ class ESMDataset(Dataset):
         return item["coords"].astype(np.float32), None, item["seq"]
 
 
+
+class ESMSampler(torch.utils.data.Sampler):
+
+    def __init__(self, data: ESMDataset, args: Namespace):
+        """ESMSampler
+
+        Args:
+            data (ESMDataset): Dataset
+            args (Namespace): Args. Must contain: 
+                - batch_type (str): fixed or dynamic
+                - batch_value (int): batch size or max token inputs for GPU
+                - bin_size (int): size of bin for Sampler
+        """
+        self.args = args
+        self.seq_len = [len(item["seq"]) for item in data]
+        self.bins_normal = self.create_bin(self.seq_len, self.args.bin_size)
+
+    def __iter__(self):
+        bins = self.bins_normal
+        
+        for key in bins:
+            random.shuffle(bins[key])
+        
+        final_indices = []
+        total_token = 0
+        index_current = 0
+        final_indices.append([])
+        
+        for key in sorted(bins.keys(), reverse=True):
+            for index in bins[key]:
+                
+                if self.args.batch_type == "dynamic":
+                    if(total_token+key > self.args.batch_value):
+                        total_token = 0
+                        final_indices.append([])
+                        index_current += 1
+                    total_token += key
+                    final_indices[index_current].append(index)
+                
+                if self.args.batch_type == "fixed":
+                    if(len(final_indices[index_current]) > self.args.batch_value-1):
+                        final_indices.append([])
+                        index_current += 1
+                    final_indices[index_current].append(index)
+        
+        random.shuffle(final_indices)       
+        return iter(final_indices)
+    
+    def create_bin(self, data, bin_size):
+        """Creates Bins for sorting the data
+
+        Args:
+            data (list): dataset
+            bin_size (int): size of bin for sorting the data
+
+        Returns:
+            bin: container with indexes 
+        """
+        max_len = max(data)
+        min_len = min(data)
+        bin = {}
+        current = min_len+bin_size-1
+        while(current<max_len):
+            bin[current] = []
+            current = current + bin_size
+        bin[max_len] = []
+        current_index = 0
+        while(True):
+            dict_index = (((data[current_index]-min_len)//bin_size) + 1)*bin_size + min_len-1
+            bin[min(dict_index, max_len)].append(current_index)
+            current_index += 1
+            if(current_index>=len(data)):
+                break
+        
+        return bin
+
+
 class ESMDataLoader(DataLoader):
     def __init__(
         self,
         esm2_alphabet: Alphabet,
         esm_if_alphabet: Alphabet,
         dataset: ESMDataset,
-        batch_size: int,
-        shuffle: bool,
+        sampler: ESMSampler,
         num_workers: int,
         **kwargs,
     ):
@@ -89,8 +169,7 @@ class ESMDataLoader(DataLoader):
             esm2_alphabet (Alphabet): ESM-2 Alphabet
             esm_if_alphabet (Alphabet): ESM-IF Alphabet
             dataset (ESMDataset): ESMDataset.
-            batch_size (int): Batch Size
-            shuffle (bool): Shuffle
+            sampler: ESMSampler
             num_workers (int): Number of Workers
         """
         self.esm2_alphabet = esm2_alphabet
@@ -102,12 +181,13 @@ class ESMDataLoader(DataLoader):
         self.esm2_batch_converter = self.esm2_alphabet.get_batch_converter()
 
         # self.collate_fn = util.CoordBatchConverter(alphabet)
-
+        
+        self.sampler = sampler #ESMSampler(batch_type = "fixed", batch_value = 64, bin_size = 6, data = dataset.data)
+        
         super().__init__(
             dataset=dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
             num_workers=num_workers,
+            batch_sampler= self.sampler,
             collate_fn=self.collate_fn,
         )
 
@@ -159,6 +239,9 @@ class ESMDataLightning(LightningDataModule):
                 - data_dir (str): Data Directory
                 - split_ratio (int): Dataset split ratio. Eg: 0.8 (80% train, 20% val)
                 - max_seq_len (int): Max Sequence Length
+                - batch_type (str): fixed or dynamic
+                - batch_value (int): batch size or max token inputs for GPU
+                - bin_size (int): size of bin for Sampler
                 - batch_size (int): Batch Size
                 - train_shuffle (bool): Train Shuffle
                 - train_num_workers (int): Train Loader - Number of Workers
@@ -191,9 +274,12 @@ class ESMDataLightning(LightningDataModule):
 
         if stage == "fit":
             self.train_dataset = ESMDataset(split="train", args=self.args)
+            self.train_sampler = ESMSampler(data=self.train_dataset.data,args=self.args)
             self.val_dataset = ESMDataset(split="val", args=self.args)
+            self.val_sampler = ESMSampler(data=self.val_dataset.data,args=self.args)
         else:
             self.test_dataset = ESMDataset(split="test", args=self.args)
+            self.test_sampler = ESMSampler(data=self.test_dataset.data,args=self.args)
 
     def train_dataloader(self) -> ESMDataLoader:
         assert self.train_dataset is not None, "Train Dataset is None"
@@ -201,8 +287,7 @@ class ESMDataLightning(LightningDataModule):
             esm2_alphabet=self.esm2_alphabet,
             esm_if_alphabet=self.esm_if_alphabet,
             dataset=self.train_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=self.args.train_shuffle,
+            sampler=self.train_sampler,
             num_workers=self.args.train_num_workers,
         )
         return data_loader
@@ -213,8 +298,7 @@ class ESMDataLightning(LightningDataModule):
             esm2_alphabet=self.esm2_alphabet,
             esm_if_alphabet=self.esm_if_alphabet,
             dataset=self.val_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=self.args.val_shuffle,
+            sampler=self.val_sampler,
             num_workers=self.args.val_num_workers,
         )
         return data_loader
@@ -225,8 +309,7 @@ class ESMDataLightning(LightningDataModule):
             esm2_alphabet=self.esm2_alphabet,
             esm_if_alphabet=self.esm_if_alphabet,
             dataset=self.test_dataset,
-            batch_size=self.args.batch_size,
-            shuffle=self.args.val_shuffle,
+            sampler=self.test_sampler,
             num_workers=self.args.val_num_workers,
         )
         return data_loader
