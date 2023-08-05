@@ -77,11 +77,11 @@ def create_bin(data, bin_size):
     """Creates Bins for sorting the data
 
     Args:
-        data (list): _description_
-        bin_size (int): _description_
+        data (list): dataset
+        bin_size (int): size of bin for sorting the data
 
     Returns:
-        bin: _description_
+        bin: container with indexes 
     """
     max_len = max(data)
     min_len = min(data)
@@ -103,13 +103,14 @@ def create_bin(data, bin_size):
 class ESMSampler(torch.utils.data.Sampler):
 
     def __init__(self, data: ESMDataset, args: Namespace):
-        """ESM
+        """ESMSampler
 
         Args:
-            data (ESMDataset): _description_
-            batch_type (str): _description_
-            batch_value (int): _description_
-            bin_size (int): _description_
+            data (ESMDataset): Dataset
+            args (Namespace): Args. Must contain: 
+                - batch_type (str): fixed or dynamic
+                - batch_value (int): batch size or max token inputs for GPU
+                - bin_size (int): size of bin for Sampler
         """
         self.batch_type = args.batch_type
         self.batch_value = args.batch_value
@@ -163,8 +164,7 @@ class ESMDataLoader(DataLoader):
             esm2_alphabet (Alphabet): ESM-2 Alphabet
             esm_if_alphabet (Alphabet): ESM-IF Alphabet
             dataset (ESMDataset): ESMDataset.
-            batch_type (str): Shuffle
-            batch_value (int): Batch Size
+            sampler: ESMSampler
             num_workers (int): Number of Workers
         """
         self.esm2_alphabet = esm2_alphabet
@@ -234,6 +234,9 @@ class ESMDataLightning(LightningDataModule):
                 - data_dir (str): Data Directory
                 - split_ratio (int): Dataset split ratio. Eg: 0.8 (80% train, 20% val)
                 - max_seq_len (int): Max Sequence Length
+                - batch_type (str): fixed or dynamic
+                - batch_value (int): batch size or max token inputs for GPU
+                - bin_size (int): size of bin for Sampler
                 - batch_size (int): Batch Size
                 - train_shuffle (bool): Train Shuffle
                 - train_num_workers (int): Train Loader - Number of Workers
