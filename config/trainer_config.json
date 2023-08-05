@@ -30,6 +30,9 @@
         "max_seq_len": 200,
         "batch_size": 64,
         "train_shuffle": true,
+        "batch_type": "fixed",
+        "batch_value": 64,
+        "bin_size": 6,
         "train_num_workers": 1,
         "val_shuffle": false,
         "val_num_workers": 1
