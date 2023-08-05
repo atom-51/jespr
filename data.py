@@ -73,32 +73,6 @@ class ESMDataset(Dataset):
         return item["coords"].astype(np.float32), None, item["seq"]
 
 
-def create_bin(data, bin_size):
-    """Creates Bins for sorting the data
-
-    Args:
-        data (list): dataset
-        bin_size (int): size of bin for sorting the data
-
-    Returns:
-        bin: container with indexes 
-    """
-    max_len = max(data)
-    min_len = min(data)
-    bin = {}
-    current = min_len+bin_size-1
-    while(current<max_len):
-        bin[current] = []
-        current = current + bin_size
-    bin[max_len] = []
-    current_index = 0
-    while(True):
-        dict_index = (((data[current_index]-min_len)//bin_size) + 1)*bin_size + min_len-1
-        bin[min(dict_index, max_len)].append(current_index)
-        current_index += 1
-        if(current_index>=len(data)):
-            break
-    return bin
 
 class ESMSampler(torch.utils.data.Sampler):
 
@@ -112,41 +86,69 @@ class ESMSampler(torch.utils.data.Sampler):
                 - batch_value (int): batch size or max token inputs for GPU
                 - bin_size (int): size of bin for Sampler
         """
-        self.batch_type = args.batch_type
-        self.batch_value = args.batch_value
-        self.bin_size = args.bin_size
+        self.args = args
         self.seq_len = [len(item["seq"]) for item in data]
-        self.bins_normal = create_bin(self.seq_len, self.bin_size)
+        self.bins_normal = self.create_bin(self.seq_len, self.args.bin_size)
 
     def __iter__(self):
-        bins = deepcopy(self.bins_normal)
+        bins = self.bins_normal
+        
         for key in bins:
             random.shuffle(bins[key])
+        
         final_indices = []
         total_token = 0
         index_current = 0
         final_indices.append([])
-        counter = 0
+        
         for key in sorted(bins.keys(), reverse=True):
             for index in bins[key]:
-                if self.batch_type == "dynamic":
-                    if(total_token+key > self.batch_value):
+                
+                if self.args.batch_type == "dynamic":
+                    if(total_token+key > self.args.batch_value):
                         total_token = 0
                         final_indices.append([])
                         index_current += 1
-                        value_token = key
-                    if(counter == 0):
-                        value_token = key
-                    counter+=1
-                    total_token += value_token
+                    total_token += key
                     final_indices[index_current].append(index)
-                if self.batch_type == "fixed":
-                    if(len(final_indices[index_current]) > self.batch_value-1):
+                
+                if self.args.batch_type == "fixed":
+                    if(len(final_indices[index_current]) > self.args.batch_value-1):
                         final_indices.append([])
                         index_current += 1
                     final_indices[index_current].append(index)
+        
         random.shuffle(final_indices)       
         return iter(final_indices)
+    
+    def create_bin(self, data, bin_size):
+        """Creates Bins for sorting the data
+
+        Args:
+            data (list): dataset
+            bin_size (int): size of bin for sorting the data
+
+        Returns:
+            bin: container with indexes 
+        """
+        max_len = max(data)
+        min_len = min(data)
+        bin = {}
+        current = min_len+bin_size-1
+        while(current<max_len):
+            bin[current] = []
+            current = current + bin_size
+        bin[max_len] = []
+        current_index = 0
+        while(True):
+            dict_index = (((data[current_index]-min_len)//bin_size) + 1)*bin_size + min_len-1
+            bin[min(dict_index, max_len)].append(current_index)
+            current_index += 1
+            if(current_index>=len(data)):
+                break
+        
+        return bin
+
 
 class ESMDataLoader(DataLoader):
     def __init__(
