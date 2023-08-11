@@ -253,9 +253,7 @@ class _ESM2(ESM2):
         pooled_representations = self.after_pool_ln(pooled_representations)
 
         # Linear Projection to joint embedding dim & Another Layer Norm
-        seq_projection = self.joint_embedding_projection(
-            pooled_representations
-        )
+        seq_projection = self.joint_embedding_projection(pooled_representations)
         # Shape: Batch size * Joint Embedding Dim
         if self.norm_embedding:
             seq_projection = normalize_embeddings(seq_projection)
@@ -561,9 +559,7 @@ def pool_tokens_per_layer(
         )
     # bos
     elif pool_strategy == "bos":
-        pooled_hidden_states = return_bos_token_embedding(
-            encoder_hidden_states
-        )
+        pooled_hidden_states = return_bos_token_embedding(encoder_hidden_states)
     else:
         raise ValueError(
             f"pool_strategy must be either mean/bos, not {pool_strategy}"
@@ -582,3 +578,80 @@ def normalize_embeddings(embeddings: torch.tensor) -> torch.tensor:
         torch.tensor: Normalized Embeddings. (B, E)
     """
     return embeddings / embeddings.norm(dim=1, keepdim=True)
+
+
+class VICReg(nn.Module):
+    def __init__(self, args: dict):
+        super().__init__()
+
+        self.lamb = args["lambda"]
+        self.mu = args["mu"]
+        self.nu = args["nu"]
+        num_layers = args["num_layers"]
+        exp_dim = args["exp_dim"]
+        self.joint_embedding_dim = args["joint_embedding_dim"]
+
+        self.exp_net = [
+            nn.Linear(self.joint_embedding_dim, exp_dim),
+            nn.BatchNorm1d(exp_dim),
+            nn.ReLU(),
+        ]
+        for _ in range(num_layers - 2):
+            self.exp_net.extend(
+                [
+                    nn.Linear(exp_dim, exp_dim),
+                    nn.BatchNorm1d(exp_dim),
+                    nn.ReLU(),
+                ]
+            )
+        self.exp_net.append(nn.Linear(exp_dim, exp_dim))
+        self.exp_net = nn.Sequential(*self.exp_net)
+
+    def forward(
+        self, esm2_out: torch.Tensor, esm_if_out: torch.Tensor
+    ) -> torch.Tensor:
+        """Calculates the VICReg Loss between the ESM2 & ESM-IF Embeddings
+
+        Args:
+            esm2_out (torch.Tensor): ESM2 Embeddings
+            esm_if_out (torch.Tensor): ESM-IF Embeddings
+
+        Returns:
+            torch.Tensor: VICReg Loss
+
+        """
+
+        esm2_out_exp = self.exp_net(esm2_out)
+        esm_if_out_exp = self.exp_net(esm_if_out)
+
+        B, exp_dim = esm2_out_exp.shape
+
+        l2_loss_fn = nn.MSELoss()
+        reg_loss = l2_loss_fn(esm2_out_exp, esm_if_out_exp) / B
+
+        std_esm2 = torch.sqrt(torch.var(esm2_out_exp, dim=0) + 1e-4)
+        std_esm_if = torch.sqrt(torch.var(esm_if_out_exp, dim=0) + 1e-4)
+        relu = nn.ReLU()
+        std_loss = torch.mean(relu(1 - std_esm2)) + torch.mean(
+            relu(1 - std_esm_if)
+        )  # 1 being the value of the hyper param gamma in the paper
+
+        mean_esm2 = esm2_out_exp - torch.mean(esm2_out_exp, dim=0)
+        mean_esm_if = esm_if_out_exp - torch.mean(esm_if_out_exp, dim=0)
+        cov_esm2 = (mean_esm2.T @ mean_esm2) / (
+            B - 1
+        )  # cov is across the exp_dim --> exp_dim x exp_dim
+        cov_esm_if = (mean_esm_if.T @ mean_esm_if) / (B - 1)
+        cov_loss = (
+            cov_esm2.pow(2).sum() - torch.trace(cov_esm2.pow(2))
+        ) / exp_dim + (
+            cov_esm_if.pow(2).sum() - torch.trace(cov_esm_if.pow(2))
+        ) / exp_dim
+
+        vicreg_loss = (
+            self.lamb * reg_loss + self.mu * std_loss + self.nu * cov_loss
+        )
+        return vicreg_loss, {
+            "expanded_esm2_out": esm2_out_exp,
+            "expanded_esm_if_out": esm_if_out_exp,
+        }
