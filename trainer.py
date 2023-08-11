@@ -39,6 +39,9 @@ def main(args, mode="train"):
     # ___________ optim _____________________________ #
     optim_args = args["optim"]  # Args to be passed to Optimizer
 
+    # ___________ loss _________________________ #
+    loss_args = args["loss"]  # Args to be passed to decide loss function
+
     # ___________ trainer ___________________________ #
     accelerator = args["trainer"]["accelerator"]
     precision = args["trainer"]["precision"]
@@ -52,9 +55,7 @@ def main(args, mode="train"):
     limit_train_batches = args["trainer"]["limit_train_batches"]
     overfit_batches = args["trainer"]["overfit_batches"]
     accumulate_grad_batches = args["trainer"]["accumulate_grad_batches"]
-    stochastic_weight_averaging = args["trainer"][
-        "stochastic_weight_averaging"
-    ]
+    stochastic_weight_averaging = args["trainer"]["stochastic_weight_averaging"]
     stochastic_weight_averaging_lr = args["trainer"][
         "stochastic_weight_averaging_lr"
     ]
@@ -88,6 +89,7 @@ def main(args, mode="train"):
         esm_if=esm_if,
         esm2_alphabet=alphabet_2,
         esm_if_alphabet=alphabet_if,
+        loss_args=loss_args,
         optim_args=optim_args,
         temperature=temperature,
         total_iterations=total_iterations,
