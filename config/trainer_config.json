@@ -12,7 +12,7 @@
         },
         "esm_if": {
             "gvp_node_hidden_dim_scalar": 100,
-            "gvp_node_hidden_dim_vector":16,
+            "gvp_node_hidden_dim_vector": 16,
             "encoder_layers": 2,
             "layer_pool_strategy": "weighted",
             "pool_last_n_layers": 2,
@@ -26,7 +26,7 @@
     "data": {
         "dataset_name": "pdb",
         "data_dir": "data/",
-        "split_ratio": 0.8,    
+        "split_ratio": 0.8,
         "max_seq_len": 500,
         "min_seq_len": 20,
         "batch_size": 64,
@@ -47,23 +47,34 @@
         "overfit_batches": 0,
         "accumulate_grad_batches": 1,
         "stochastic_weight_averaging": true,
-        "stochastic_weight_averaging_lr": 1e-2,
+        "stochastic_weight_averaging_lr": 0.01,
         "detect_anomaly": true,
         "grad_clip_val": 1.5,
         "grad_clip_algorithm": "norm"
     },
     "optim": {
-        "lr": 1e-3,
+        "lr": 0.001,
         "weight_decay": 0.01,
         "betas": [
             0.9,
             0.999
         ],
-        "eps": 1e-8
+        "eps": 1e-08
     },
     "meta": {
         "project_name": "jespr_config_new",
         "run_name": null,
         "logs_dir": "logs/"
+    },
+    "loss": {
+        "loss_fn": "cross_entropy",
+        "vicreg_args": {
+            "lambda": 25.0,
+            "mu": 1.0,
+            "nu": 1.0,
+            "num_layers": 3,
+            "exp_dim": 1024,
+            "joint_embedding_dim": 256
+        }
     }
 }
