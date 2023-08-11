@@ -24,6 +24,7 @@ class JESPR(pl.LightningModule):
         esm2_alphabet: Alphabet,
         esm_if: _ESM_IF,
         esm_if_alphabet: Alphabet,
+        loss_args: dict,
         optim_args: dict = {"lr": DEFAULT_LR},
         temperature: float = INIT_TEMP,
         total_iterations: int = 10000,
@@ -51,6 +52,13 @@ class JESPR(pl.LightningModule):
         # Needed for LR scheduler
         self.total_iterations = total_iterations
 
+        if loss_args["loss_fn"] == "vicreg_loss":
+            from modules import VICReg
+
+            self.loss_fn = VICReg(loss_args["vicreg_args"])
+        else:
+            self.loss_fn = self.cross_entropy_loss
+
     def forward(self, x) -> tuple:
         """Foward Function for JESPR
 
@@ -67,14 +75,24 @@ class JESPR(pl.LightningModule):
         esm2_out = self.esm2(tokens)
         esm_if_out = self.esm_if(coords, padding_mask, confidence)
 
-        B, J = esm2_out.shape
-        # Calculating the Loss
-        # text = seq, image = structure
+        loss, logits = self.loss_fn(esm2_out, esm_if_out)
+        return loss, logits
+
+    def cross_entropy_loss(self, esm2_out, esm_if_out) -> torch.tensor:
+        """Cross Entropy Loss
+
+        Args:
+            esm2_out (torch.tensor): ESM2 Embeddings
+            esm_if_out (torch.tensor): ESM-IF Embeddings
+
+        Returns:
+            torch.tensor: Cross Entropy Loss
+        """
         logits_per_structure = self.temperature * esm_if_out @ esm2_out.T
         logits_per_seq = self.temperature * esm2_out @ esm_if_out.T
 
         labels = torch.arange(
-            B, dtype=torch.long, device=logits_per_structure.device
+            esm2_out.shape[0], dtype=torch.long, device=esm2_out.device
         )
 
         loss = (
