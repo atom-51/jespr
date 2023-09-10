@@ -30,6 +30,7 @@ class ESMDataset(Dataset):
             "cath",
             "pdb",
             "pdb_extended",
+            "scope_10",
         ], "Invalid Dataset Name"
         with open(
             path.join(args.data_dir, f"{args.dataset_name}/{split}.pkl"), "rb"
@@ -73,7 +74,28 @@ class ESMDataset(Dataset):
         """
         # chunk where the idx-th protein is located
         item = self.data[idx]
-        return item["coords"].astype(np.float32), None, item["seq"]
+        if self.args.dataset_name == "scope_10":
+            return {
+                "contrastive": (
+                    item["coords"].astype(np.float32),
+                    None,
+                    item["seq"],
+                ),
+                "classification": (
+                    item["class"],
+                    item["fold"],
+                    item["domain"],
+                    item["superfamily"],
+                    item["family"],
+                    item["sp"],
+                ),
+            }
+        else:
+            return (
+                item["coords"].astype(np.float32),
+                None,
+                item["seq"],
+            )
 
 
 class ESMBatchSampler(torch.utils.data.BatchSampler):
@@ -174,13 +196,18 @@ class ESMDataLoader(DataLoader):
         self.esm_if_batch_converter = util.CoordBatchConverter(self.esm_if_alphabet)
         self.esm2_batch_converter = self.esm2_alphabet.get_batch_converter()
 
+        if dataset.args.dataset_name == "scope_10":
+            collate_fn = self.collate_fn_scope
+        else:
+            collate_fn = self.collate_fn
+
         if batch_sampler is None:
             super().__init__(
                 dataset=dataset,
                 batch_size=batch_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
-                collate_fn=self.collate_fn,
+                collate_fn=collate_fn,
             )
 
         else:
@@ -188,7 +215,7 @@ class ESMDataLoader(DataLoader):
                 dataset=dataset,
                 num_workers=num_workers,
                 batch_sampler=batch_sampler,
-                collate_fn=self.collate_fn,
+                collate_fn=collate_fn,
             )
 
     def collate_fn(
@@ -221,6 +248,37 @@ class ESMDataLoader(DataLoader):
         ) = self.esm_if_batch_converter(batch)
 
         return coords, confidence, strs, tokens, padding_mask
+
+    def collate_fn_scope(self, batch: list):
+        """Collate Function for SCOPe
+
+        Args:
+            batch (list): _description_
+
+        Returns:
+            tuple: Tuple of xs and ys
+        """
+        # Prepare input seqs for esm2 batch converter as mentioned in
+        # the example here: https://github.com/facebookresearch/esm/blob/2b369911bb5b4b0dda914521b9475cad1656b2ac/README.md?plain=1#L176
+
+        inp_seqs = [("", item["contrastive"][2]) for item in batch]
+
+        # Process ESM-2 ->
+        _labels, _strs, tokens = self.esm2_batch_converter(inp_seqs)
+
+        # Process ESM-IF ->
+        (
+            coords,
+            confidence,
+            strs,
+            _,
+            padding_mask,
+        ) = self.esm_if_batch_converter([item["contrastive"] for item in batch])
+
+        return {
+            "contrastive": (coords, confidence, strs, tokens, padding_mask),
+            "classification": [item["classification"] for item in batch],
+        }
 
 
 class ESMDataLightning(LightningDataModule):

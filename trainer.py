@@ -171,6 +171,7 @@ def main(args, mode="train"):
         esm2_alphabet=alphabet_2,
         esm_if_alphabet=alphabet_if,
         optim_args=optim_args,
+        dataset_name=data_args["dataset_name"],
     )
 
     if mode == "exp_no_trainer":

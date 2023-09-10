@@ -24,6 +24,7 @@ class JESPR(pl.LightningModule):
         esm2_alphabet: Alphabet,
         esm_if_alphabet: Alphabet,
         optim_args: dict,
+        **kwargs,
     ) -> None:
         """
         JESPR Model
@@ -49,7 +50,70 @@ class JESPR(pl.LightningModule):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.optim_args = optim_args
 
+        self.dataset_name = kwargs.get("dataset_name", "pdb")
+        if self.dataset_name == "scope_10":
+            self.classfication_labels = {
+                "class": 12,
+                "fold": 1350,
+                "domain": 11110,
+                "superfamily": 2074,
+                "family": 4558,
+                "sp": 24194,
+            }
+            self.classifcation_loss_scalars = {
+                "class": (4 / 6) / -np.log(1 / 12),
+                "fold": (4 / 6) / -np.log(1 / 1350),
+                "domain": (4 / 6) / -np.log(1 / 11110),
+                "superfamily": (4 / 6) / -np.log(1 / 2074),
+                "family": (4 / 6) / -np.log(1 / 4558),
+                "sp": (4 / 6) / -np.log(1 / 24194),
+            }
+
+            out_dim = sequence_encoder.joint_embedding_projection.out_features
+            self.classification_linears = nn.ModuleList(
+                [
+                    nn.Linear(out_dim, class_size)
+                    for class_size in self.classfication_labels.values()
+                ]
+            )
+
     def forward(self, x) -> tuple:
+        if self.dataset_name != "scope_10":
+            loss, reprs = self.forward_contrastive(x)
+            reprs.pop("seq_repr")
+            return loss, reprs
+        else:
+            cont_loss, reprs = self.forward_contrastive(x["contrastive"])
+            class_outs = {}
+            class_losses = {}
+            class_accs = {}
+
+            B, J = reprs["seq_repr"].shape
+            cte_est = -np.log(1 / B)
+            for i, label in enumerate(self.classfication_labels.keys()):
+                class_outs[label] = self.classification_linears[i](reprs["seq_repr"])
+
+                loss_scalar = (cte_est / 6) / -np.log(
+                    1 / self.classfication_labels[label]
+                )
+                curr_class_labels = torch.tensor(
+                    [val_[i] for val_ in x["classification"]],
+                    dtype=torch.long,
+                    device=class_outs[label].device,
+                )
+                class_losses[label] = loss_scalar * nn.functional.cross_entropy(
+                    class_outs[label],
+                    curr_class_labels,
+                )
+                # Calc accuracy
+                with torch.no_grad():
+                    class_accs[label] = (
+                        class_outs[label].argmax(dim=-1) == curr_class_labels
+                    ).sum().item() / B
+
+            return cont_loss, reprs, class_losses, class_outs, class_accs
+
+    def forward_contrastive(self, x) -> tuple:
         """Foward Function for JESPR
 
         Args:
@@ -82,6 +146,7 @@ class JESPR(pl.LightningModule):
         return loss, {
             "logits_per_structure": logits_per_structure,
             "logits_per_seq": logits_per_seq,
+            "seq_repr": seq_repr,
         }
 
     @torch.no_grad()
@@ -106,15 +171,31 @@ class JESPR(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         start_time = time.time()
-        loss, logits = self.forward(batch)
-        B = batch[0].shape[0]
-        self.log("metrics/train/loss", loss, batch_size=B)
-        self.log(
-            "metrics/train/time_per_step",
-            time.time() - start_time,
-            batch_size=B,
-        )
-        return {"loss": loss, "logits": logits}
+        if self.dataset_name != "scope_10":
+            loss, logits = self.forward(batch)
+            B = batch[0].shape[0]
+            self.log("metrics/train/loss", loss, batch_size=B)
+            self.log(
+                "metrics/train/time_per_step",
+                time.time() - start_time,
+                batch_size=B,
+            )
+            return {"loss": loss, "logits": logits}
+        else:
+            cont_loss, reprs, class_losses, class_outs, class_accs = self.forward(batch)
+            B = batch["contrastive"][0].shape[0]
+            total_loss = cont_loss + sum(class_losses.values())
+            self.log(
+                "metrics/train/time_per_step",
+                time.time() - start_time,
+                batch_size=B,
+            )
+            self.log("metrics/train/total_loss", total_loss, batch_size=B)
+            self.log("metrics/train/contrastive_loss", cont_loss, batch_size=B)
+            for label, c_loss in class_losses.items():
+                self.log(f"metrics/train/{label}_loss", c_loss, batch_size=B)
+                self.log(f"metrics/train/{label}_acc", class_accs[label], batch_size=B)
+            return {"loss": total_loss, "logits": reprs}
 
     def on_train_batch_end(self, outputs, batch, batch_idx):
         argmax_acc = self.calc_argmax_acc(outputs["logits"])
@@ -124,16 +205,32 @@ class JESPR(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         start_time = time.time()
-        B = batch[0].shape[0]
-        loss, logits = self.forward(batch)
-        self.log("metrics/val/loss", loss, batch_size=B, sync_dist=True)
-        self.log(
-            "metrics/val/time_per_step",
-            time.time() - start_time,
-            batch_size=B,
-            sync_dist=True,
-        )
-        return {"loss": loss, "logits": logits}
+        if self.dataset_name != "scope_10":
+            B = batch[0].shape[0]
+            loss, logits = self.forward(batch)
+            self.log("metrics/val/loss", loss, batch_size=B, sync_dist=True)
+            self.log(
+                "metrics/val/time_per_step",
+                time.time() - start_time,
+                batch_size=B,
+                sync_dist=True,
+            )
+            return {"loss": loss, "logits": logits}
+        else:
+            cont_loss, reprs, class_losses, class_outs, class_accs = self.forward(batch)
+            B = batch["contrastive"][0].shape[0]
+            total_loss = cont_loss + sum(class_losses.values())
+            self.log(
+                "metrics/val/time_per_step",
+                time.time() - start_time,
+                batch_size=B,
+            )
+            self.log("metrics/val/total_loss", total_loss, batch_size=B)
+            self.log("metrics/val/contrastive_loss", cont_loss, batch_size=B)
+            for label, c_loss in class_losses.items():
+                self.log(f"metrics/val/{label}_loss", c_loss, batch_size=B)
+                self.log(f"metrics/val/{label}_acc", class_accs[label], batch_size=B)
+            return {"loss": total_loss, "logits": reprs}
 
     def on_validation_batch_end(self, outputs, batch, batch_idx):
         argmax_acc = self.calc_argmax_acc(outputs["logits"])
