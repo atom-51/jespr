@@ -111,7 +111,7 @@ class JESPR(pl.LightningModule):
                         class_outs[label].argmax(dim=-1) == curr_class_labels
                     ).sum().item() / B
 
-            return cont_loss, reprs, class_losses, class_outs, class_accs
+            return cont_loss, reprs, class_losses, class_accs
 
     def forward_contrastive(self, x) -> tuple:
         """Foward Function for JESPR
@@ -180,9 +180,12 @@ class JESPR(pl.LightningModule):
                 time.time() - start_time,
                 batch_size=B,
             )
-            return {"loss": loss, "logits": logits}
+            argmax_acc = self.calc_argmax_acc(logits)
+            self.log("metrics/train/acc_structure", argmax_acc["acc_str"], batch_size=B)
+            self.log("metrics/train/acc_sequence", argmax_acc["acc_seq"], batch_size=B)
+            return {"loss": loss}
         else:
-            cont_loss, reprs, class_losses, class_outs, class_accs = self.forward(batch)
+            cont_loss, cont_logits, class_losses, class_accs = self.forward(batch)
             B = batch["contrastive"][0].shape[0]
             total_loss = cont_loss + sum(class_losses.values())
             self.log(
@@ -192,16 +195,16 @@ class JESPR(pl.LightningModule):
             )
             self.log("metrics/train/total_loss", total_loss, batch_size=B)
             self.log("metrics/train/contrastive_loss", cont_loss, batch_size=B)
+
+            argmax_acc = self.calc_argmax_acc(cont_logits)
+            self.log("metrics/train/acc_structure", argmax_acc["acc_str"], batch_size=B)
+            self.log("metrics/train/acc_sequence", argmax_acc["acc_seq"], batch_size=B)
+
             for label, c_loss in class_losses.items():
                 self.log(f"metrics/train/{label}_loss", c_loss, batch_size=B)
                 self.log(f"metrics/train/{label}_acc", class_accs[label], batch_size=B)
-            return {"loss": total_loss, "logits": reprs}
+            return {"loss": total_loss}
 
-    def on_train_batch_end(self, outputs, batch, batch_idx):
-        argmax_acc = self.calc_argmax_acc(outputs["logits"])
-        B = batch[0].shape[0]
-        self.log("metrics/train/acc_structure", argmax_acc["acc_str"], batch_size=B)
-        self.log("metrics/train/acc_sequence", argmax_acc["acc_seq"], batch_size=B)
 
     def validation_step(self, batch, batch_idx):
         start_time = time.time()
@@ -217,7 +220,7 @@ class JESPR(pl.LightningModule):
             )
             return {"loss": loss, "logits": logits}
         else:
-            cont_loss, reprs, class_losses, class_outs, class_accs = self.forward(batch)
+            cont_loss, reprs, class_losses, class_accs = self.forward(batch)
             B = batch["contrastive"][0].shape[0]
             total_loss = cont_loss + sum(class_losses.values())
             self.log(
@@ -232,21 +235,6 @@ class JESPR(pl.LightningModule):
                 self.log(f"metrics/val/{label}_acc", class_accs[label], batch_size=B)
             return {"loss": total_loss, "logits": reprs}
 
-    def on_validation_batch_end(self, outputs, batch, batch_idx):
-        argmax_acc = self.calc_argmax_acc(outputs["logits"])
-        B = batch[0].shape[0]
-        self.log(
-            "metrics/val/acc_structure",
-            argmax_acc["acc_str"],
-            batch_size=B,
-            sync_dist=True,
-        )
-        self.log(
-            "metrics/val/acc_sequence",
-            argmax_acc["acc_seq"],
-            batch_size=B,
-            sync_dist=True,
-        )
 
     def configure_optimizers(self) -> torch.optim.Adam:
         """Return Optimizer
